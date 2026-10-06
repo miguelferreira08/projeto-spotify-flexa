@@ -380,3 +380,4 @@ document.querySelectorAll("[data-close]").forEach((button) => {
 });
 
 initAuth(authChanged);
+
