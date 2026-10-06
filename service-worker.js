@@ -1,10 +1,11 @@
-const CACHE = "redbeat-v1";
+const CACHE = "redbeat-v2";
 
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./pwa.js",
   "./auth.js",
   "./media.js",
   "./firebase.js",
