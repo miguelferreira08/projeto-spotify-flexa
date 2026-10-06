@@ -22,14 +22,14 @@ initPlayer({
   openAuth
 });
 initAdmin({
-  onCurrentTrackRemoved: resetPlayer
+  onCurrentTrackRemoved: () => resetPlayer(false)
 });
 
 initAuth({
   onSignedIn: () => subscribeToTracks(),
   onSignedOut: () => {
     unsubscribeFromTracks();
-    resetPlayer();
+    resetPlayer(true);
   }
 });
 

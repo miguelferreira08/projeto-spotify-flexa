@@ -26,11 +26,6 @@ export function escapeHtml(value = "") {
   }[char]));
 }
 
-export function safeExtension(file, fallback) {
-  const ext = file.name.split(".").pop()?.toLowerCase();
-  return /^[a-z0-9]{2,5}$/.test(ext || "") ? ext : fallback;
-}
-
 export function getAudioDuration(file) {
   return new Promise((resolve, reject) => {
     const audio = document.createElement("audio");

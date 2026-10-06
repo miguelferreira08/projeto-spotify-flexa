@@ -8,6 +8,7 @@ import { db } from "./firebase.js";
 import { els } from "./dom.js";
 import { state } from "./state.js";
 import { isAdmin } from "./permissions.js";
+import { getCoverObjectUrl } from "./media.js";
 import { escapeHtml, formatLibraryDuration, formatTime } from "./utils.js";
 import { showToast } from "./ui.js";
 
@@ -21,12 +22,29 @@ export function configureLibraryHandlers(nextHandlers = {}) {
   handlers = { ...handlers, ...nextHandlers };
 }
 
+async function loadCover(img, track) {
+  if (!img || !track) return;
+  img.src = track.coverDataUrl || track.coverURL || "./assets/redbeat-logo.png";
+  img.dataset.coverTrackId = track.id;
+  if (track.coverDataUrl || track.coverURL || !track.coverChunkCount) return;
+
+  try {
+    const url = await getCoverObjectUrl(track);
+    if (img.isConnected && img.dataset.coverTrackId === track.id) img.src = url;
+  } catch (error) {
+    console.error("Falha ao abrir capa:", error);
+    if (img.isConnected && img.dataset.coverTrackId === track.id) img.src = "./assets/redbeat-logo.png";
+  }
+}
+
 export function subscribeToTracks() {
   state.unsubscribeTracks?.();
   const tracksQuery = query(collection(db, "tracks"), orderBy("createdAt", "desc"));
 
   state.unsubscribeTracks = onSnapshot(tracksQuery, (snapshot) => {
-    state.tracks = snapshot.docs.map((snap) => ({ id: snap.id, ...snap.data() }));
+    state.tracks = snapshot.docs
+      .map((snap) => ({ id: snap.id, ...snap.data() }))
+      .filter((track) => track.kind === "track" || (!track.kind && track.title));
     applyFilter();
     updateHero();
   }, (error) => {
@@ -81,7 +99,7 @@ export function renderTracks() {
         <button class="row-play" type="button" aria-label="Tocar ${escapeHtml(track.title)}">${actualIndex === state.currentTrackIndex && !els.audioPlayer.paused ? "❚❚" : "▶"}</button>
       </div>
       <div class="track-title-cell">
-        <img class="track-cover" src="${escapeHtml(track.coverURL || "./assets/redbeat-logo.png")}" alt="" loading="lazy" />
+        <img class="track-cover" alt="" loading="lazy" />
         <div class="track-title-copy">
           <strong>${escapeHtml(track.title || "Sem título")}</strong>
           <span>${escapeHtml(track.artist || "Artista desconhecido")}</span>
@@ -95,6 +113,7 @@ export function renderTracks() {
         : `<button class="icon-btn" type="button" aria-label="Mais opções" title="Mais opções">•••</button>`}</div>
     `;
 
+    loadCover(row.querySelector(".track-cover"), track);
     row.querySelector(".row-play").addEventListener("click", () => handlers.onToggleTrack?.(actualIndex));
     row.querySelector(".track-title-cell").addEventListener("dblclick", () => handlers.onPlayTrack?.(actualIndex));
     row.querySelector(".track-title-cell").style.cursor = "pointer";
@@ -113,8 +132,15 @@ export function updateHero() {
   els.totalDuration.textContent = formatLibraryDuration(total);
 
   [...els.coverGrid.querySelectorAll("img")].forEach((img, index) => {
-    img.src = state.tracks[index]?.coverURL || "./assets/redbeat-logo.png";
-    img.alt = state.tracks[index] ? `Capa de ${state.tracks[index].title}` : "RedBeat";
+    const track = state.tracks[index];
+    if (track) {
+      img.alt = `Capa de ${track.title}`;
+      loadCover(img, track);
+    } else {
+      img.removeAttribute("data-cover-track-id");
+      img.src = "./assets/redbeat-logo.png";
+      img.alt = "RedBeat";
+    }
   });
 }
 
@@ -128,12 +154,9 @@ export function initLibrary() {
     }
   });
 
-  els.searchFocusBtn.addEventListener("click", () => els.searchInput.focus());
   els.mobileSearchBtn.addEventListener("click", () => {
     const box = els.searchInput.closest(".search-box");
     box.classList.toggle("mobile-open");
-    if (box.classList.contains("mobile-open")) {
-      setTimeout(() => els.searchInput.focus(), 80);
-    }
+    if (box.classList.contains("mobile-open")) setTimeout(() => els.searchInput.focus(), 80);
   });
 }

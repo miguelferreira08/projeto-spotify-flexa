@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#090909" />
   <title>RedBeat</title>
+  <link rel="icon" type="image/png" href="./assets/redbeat-logo.png" />
+  <link rel="apple-touch-icon" href="./assets/redbeat-logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -22,10 +24,6 @@
         <button class="nav-item active" data-scroll="librarySection" type="button">
           <span class="nav-icon">⌂</span>
           <span>Início</span>
-        </button>
-        <button class="nav-item" id="searchFocusBtn" type="button">
-          <span class="nav-icon">⌕</span>
-          <span>Buscar</span>
         </button>
         <button class="nav-item" data-scroll="librarySection" type="button">
           <span class="nav-icon">♫</span>
@@ -71,16 +69,12 @@
 
       <section class="hero" aria-labelledby="heroTitle">
         <div class="hero-glow"></div>
-        <div class="cover-grid" id="coverGrid" aria-label="Capas da biblioteca">
-          <img src="./assets/redbeat-logo.png" alt="RedBeat" />
-          <img src="./assets/redbeat-logo.png" alt="RedBeat" />
-          <img src="./assets/redbeat-logo.png" alt="RedBeat" />
+        <div class="cover-grid" id="coverGrid" aria-label="Capa da biblioteca">
           <img src="./assets/redbeat-logo.png" alt="RedBeat" />
         </div>
         <div class="hero-copy">
           <span class="eyebrow">BIBLIOTECA</span>
           <h1 id="heroTitle">RedBeat</h1>
-          <p>Um player simples, rápido e feito para o seu catálogo.</p>
           <div class="hero-meta">
             <img src="./assets/redbeat-logo.png" alt="" />
             <strong>RedBeat</strong>
@@ -200,7 +194,7 @@
       <button class="close-btn" type="button" data-close-dialog aria-label="Fechar">×</button>
       <span class="eyebrow">PAINEL ADMIN</span>
       <h2>Adicionar música</h2>
-      <p class="modal-subtitle">Envie o MP3, a capa e os metadados. Somente o administrador pode salvar.</p>
+      <p class="modal-subtitle">O MP3 e a capa são comprimidos pelo navegador e salvos no Firestore. Ao abrir, o RedBeat baixa e descomprime os arquivos automaticamente.</p>
 
       <div class="admin-grid">
         <label class="upload-card cover-upload">
@@ -230,7 +224,7 @@
           <label class="file-field">
             <span>Arquivo de áudio</span>
             <input id="audioFile" type="file" accept="audio/mpeg,.mp3" required />
-            <small id="audioFileName">Selecione um arquivo MP3</small>
+            <small id="audioFileName">Selecione um arquivo MP3 • máximo 15 MB • será comprimido</small>
           </label>
         </div>
       </div>

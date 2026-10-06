@@ -6,8 +6,8 @@ service firebase.storage {
     }
 
     function isAdmin() {
-      // TROQUE pelo MESMO UID usado no app.js e no firestore.rules.
-      return signedIn() && request.auth.uid == 'COLE_AQUI_O_UID_DA_CONTA_ADMIN';
+      // UID do administrador. Deve ser o mesmo usado no config.js e no firestore.rules.
+      return signedIn() && request.auth.uid == 'aGxAVvsRyVVzjgf2LcV0GImQXRp2';
     }
 
     match /audio/{trackId}/{fileName} {

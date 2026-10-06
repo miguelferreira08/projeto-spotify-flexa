@@ -36,7 +36,6 @@ export const els = {
   emptyTracksState: $("emptyTracksState"),
   emptyTracksText: $("emptyTracksText"),
   searchInput: $("searchInput"),
-  searchFocusBtn: $("searchFocusBtn"),
   mobileSearchBtn: $("mobileSearchBtn"),
   trackCount: $("trackCount"),
   totalDuration: $("totalDuration"),
