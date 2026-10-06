@@ -3,196 +3,225 @@ import {
   deleteDoc,
   doc,
   getDoc,
-  setDoc
+  setDoc,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+
 import { db } from "./firebase.js";
-import {
-  getAssetChunkId,
-  getAudioChunkId,
-  splitIntoChunks
-} from "./chunk-utils.js";
-import {
-  concatUint8Arrays,
-  gzipCompress,
-  gzipDecompress
-} from "./compression.js";
-import { compressCoverToBlob } from "./file-utils.js";
 
-const audioUrlCache = new Map();
-const coverUrlCache = new Map();
+const CHUNK = 700 * 1024;
+const MAX_AUDIO = 15 * 1024 * 1024;
+const cache = new Map();
 
-async function saveCompressedAsset(trackId, assetType, sourceBytes, onProgress = () => {}) {
-  onProgress(0.04);
-  const compressed = await gzipCompress(sourceBytes);
-  onProgress(0.18);
-  const chunks = splitIntoChunks(compressed);
-  const savedIds = [];
+const id = (track, type, index) =>
+  `${type}chunk-${track}-${String(index).padStart(4, "0")}`;
 
-  try {
-    for (let index = 0; index < chunks.length; index += 1) {
-      const chunkId = getAssetChunkId(trackId, assetType, index);
-      await setDoc(doc(db, "tracks", chunkId), {
-        kind: assetType === "audio" ? "audioChunk" : "coverChunk",
-        trackId,
-        assetType,
-        index,
-        compression: "gzip",
-        bytes: Bytes.fromUint8Array(chunks[index])
-      });
-      savedIds.push(chunkId);
-      onProgress(0.18 + ((index + 1) / chunks.length) * 0.82);
-    }
-  } catch (error) {
-    await Promise.allSettled(savedIds.map((id) => deleteDoc(doc(db, "tracks", id))));
-    throw error;
+const join = (parts) => {
+  const totalLength = parts.reduce((total, part) => total + part.length, 0);
+  const output = new Uint8Array(totalLength);
+
+  let offset = 0;
+
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
   }
 
-  return {
-    chunkCount: chunks.length,
-    compressedSize: compressed.byteLength,
-    originalSize: sourceBytes.byteLength
-  };
-}
+  return output;
+};
 
-async function loadAssetChunks(trackId, assetType, count, onProgress = () => {}) {
-  const chunkCount = Number(count) || 0;
-  if (!chunkCount) throw new Error(`O arquivo de ${assetType === "audio" ? "áudio" : "capa"} não foi encontrado.`);
+async function gzip(bytes, decode = false) {
+  const Stream = decode ? DecompressionStream : CompressionStream;
 
-  const parts = new Array(chunkCount);
-  let completed = 0;
-  let cursor = 0;
-  const concurrency = Math.min(4, chunkCount);
-
-  async function worker() {
-    while (true) {
-      const index = cursor++;
-      if (index >= chunkCount) return;
-      const id = getAssetChunkId(trackId, assetType, index);
-      const snap = await getDoc(doc(db, "tracks", id));
-      if (!snap.exists()) throw new Error(`Parte ${index + 1} de ${assetType} não encontrada.`);
-
-      const field = snap.data()?.bytes;
-      if (!field?.toUint8Array) throw new Error("Arquivo inválido no Firestore.");
-      parts[index] = field.toUint8Array();
-      completed += 1;
-      onProgress(completed / chunkCount);
-    }
+  if (typeof Stream !== "function") {
+    throw new Error("Atualize o navegador para usar compressão GZIP.");
   }
 
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-  return concatUint8Arrays(parts);
+  const stream = new Blob([bytes])
+    .stream()
+    .pipeThrough(new Stream("gzip"));
+
+  const buffer = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buffer);
 }
 
-async function loadLegacyAudioChunks(trackId, count, onProgress = () => {}) {
-  const chunkCount = Number(count) || 0;
-  const parts = new Array(chunkCount);
-  for (let index = 0; index < chunkCount; index += 1) {
-    const snap = await getDoc(doc(db, "tracks", getAudioChunkId(trackId, index)));
-    if (!snap.exists()) throw new Error(`Trecho ${index + 1} do áudio não foi encontrado.`);
-    const field = snap.data()?.bytes;
-    if (!field?.toUint8Array) throw new Error("Trecho de áudio inválido no Firestore.");
-    parts[index] = field.toUint8Array();
-    onProgress((index + 1) / chunkCount);
+async function coverBytes(file) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("A capa precisa ser uma imagem.");
   }
-  return concatUint8Arrays(parts);
+
+  const url = URL.createObjectURL(file);
+  const image = new Image();
+
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = reject;
+    image.src = url;
+  });
+
+  URL.revokeObjectURL(url);
+
+  const scale = Math.min(
+    1,
+    600 / Math.max(image.naturalWidth, image.naturalHeight),
+  );
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+  canvas
+    .getContext("2d")
+    .drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (result) =>
+        result
+          ? resolve(result)
+          : reject(new Error("Falha ao comprimir a capa.")),
+      "image/jpeg",
+      0.72,
+    );
+  });
+
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
-export async function saveAudioCompressed(trackId, file, onProgress = () => {}) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return saveCompressedAsset(trackId, "audio", bytes, onProgress);
-}
+async function save(track, type, bytes, progress = () => {}) {
+  const zipped = await gzip(bytes);
+  const parts = [];
 
-export async function saveCoverCompressed(trackId, file, onProgress = () => {}) {
-  const preparedBlob = await compressCoverToBlob(file);
-  const bytes = new Uint8Array(await preparedBlob.arrayBuffer());
-  const result = await saveCompressedAsset(trackId, "cover", bytes, onProgress);
-  return {
-    ...result,
-    inputSize: file.size,
-    mime: preparedBlob.type || "image/jpeg"
-  };
-}
+  for (let index = 0; index < zipped.length; index += CHUNK) {
+    parts.push(zipped.slice(index, index + CHUNK));
+  }
 
-export async function getAudioObjectUrl(track, onProgress = () => {}) {
-  if (track.audioURL) return track.audioURL;
-  const cached = audioUrlCache.get(track.id);
-  if (cached) return cached;
-
-  let audioBytes;
-  if (track.storageMode === "firestore-gzip-chunks") {
-    const compressed = await loadAssetChunks(track.id, "audio", track.audioChunkCount, (fraction) => {
-      onProgress(fraction * 0.78);
+  for (let index = 0; index < parts.length; index += 1) {
+    await setDoc(doc(db, "tracks", id(track, type, index)), {
+      kind: `${type}Chunk`,
+      trackId: track,
+      index,
+      bytes: Bytes.fromUint8Array(parts[index]),
     });
-    onProgress(0.82);
-    audioBytes = await gzipDecompress(compressed);
-    onProgress(1);
-  } else {
-    // Compatibilidade com faixas gravadas antes da compressão GZIP.
-    audioBytes = await loadLegacyAudioChunks(track.id, track.audioChunkCount, onProgress);
+
+    progress((index + 1) / parts.length);
   }
 
-  const blob = new Blob([audioBytes], { type: track.audioMime || "audio/mpeg" });
-  const url = URL.createObjectURL(blob);
-  audioUrlCache.set(track.id, url);
-  return url;
+  return {
+    count: parts.length,
+    original: bytes.length,
+    compressed: zipped.length,
+  };
 }
 
-export async function getCoverObjectUrl(track) {
-  if (track.coverDataUrl) return track.coverDataUrl;
-  if (track.coverURL) return track.coverURL;
-  const cached = coverUrlCache.get(track.id);
-  if (cached) return cached;
-  if (!track.coverChunkCount) return "./assets/redbeat-logo.png";
+async function load(track, type, count, progress = () => {}) {
+  const parts = [];
 
-  const compressed = await loadAssetChunks(track.id, "cover", track.coverChunkCount);
-  const bytes = track.storageMode === "firestore-gzip-chunks"
-    ? await gzipDecompress(compressed)
-    : compressed;
-  const blob = new Blob([bytes], { type: track.coverMime || "image/jpeg" });
-  const url = URL.createObjectURL(blob);
-  coverUrlCache.set(track.id, url);
-  return url;
-}
-
-async function deleteAssetChunks(trackId, assetType, chunkCount) {
-  const count = Number(chunkCount) || 0;
   for (let index = 0; index < count; index += 1) {
-    await deleteDoc(doc(db, "tracks", getAssetChunkId(trackId, assetType, index)));
+    const snapshot = await getDoc(
+      doc(db, "tracks", id(track, type, index)),
+    );
+
+    if (!snapshot.exists()) {
+      throw new Error("Arquivo incompleto no Firestore.");
+    }
+
+    parts.push(snapshot.data().bytes.toUint8Array());
+    progress((index + 1) / count);
+  }
+
+  return gzip(join(parts), true);
+}
+
+export async function saveFiles(
+  track,
+  audio,
+  cover,
+  progress = () => {},
+) {
+  if (audio.size > MAX_AUDIO) {
+    throw new Error("O MP3 pode ter no máximo 15 MB.");
+  }
+
+  const audioBytes = new Uint8Array(await audio.arrayBuffer());
+  const savedAudio = await save(track, "audio", audioBytes, (value) => {
+    progress(value * 0.8);
+  });
+
+  const coverData = await coverBytes(cover);
+  const savedCover = await save(track, "cover", coverData, (value) => {
+    progress(0.8 + value * 0.2);
+  });
+
+  return {
+    audioChunkCount: savedAudio.count,
+    coverChunkCount: savedCover.count,
+    audioOriginalSize: savedAudio.original,
+    audioCompressedSize: savedAudio.compressed,
+    coverCompressedSize: savedCover.compressed,
+  };
+}
+
+export async function audioUrl(track, progress = () => {}) {
+  const key = `a:${track.id}`;
+
+  if (cache.has(key)) {
+    return cache.get(key);
+  }
+
+  const bytes = await load(
+    track.id,
+    "audio",
+    track.audioChunkCount,
+    progress,
+  );
+
+  const url = URL.createObjectURL(
+    new Blob([bytes], {
+      type: "audio/mpeg",
+    }),
+  );
+
+  cache.set(key, url);
+  return url;
+}
+
+export async function coverUrl(track) {
+  const key = `c:${track.id}`;
+
+  if (cache.has(key)) {
+    return cache.get(key);
+  }
+
+  const bytes = await load(track.id, "cover", track.coverChunkCount);
+  const url = URL.createObjectURL(
+    new Blob([bytes], {
+      type: "image/jpeg",
+    }),
+  );
+
+  cache.set(key, url);
+  return url;
+}
+
+export async function removeFiles(track) {
+  const files = [
+    ["audio", track.audioChunkCount],
+    ["cover", track.coverChunkCount],
+  ];
+
+  for (const [type, count] of files) {
+    for (let index = 0; index < (count || 0); index += 1) {
+      await deleteDoc(doc(db, "tracks", id(track.id, type, index)));
+    }
+  }
+
+  for (const key of [`a:${track.id}`, `c:${track.id}`]) {
+    const url = cache.get(key);
+
+    if (url) {
+      URL.revokeObjectURL(url);
+    }
+
+    cache.delete(key);
   }
 }
-
-export async function deleteTrackAssets(track) {
-  const tasks = [];
-  if (track.audioChunkCount) tasks.push(deleteAssetChunks(track.id, "audio", track.audioChunkCount));
-  if (track.coverChunkCount) tasks.push(deleteAssetChunks(track.id, "cover", track.coverChunkCount));
-  await Promise.all(tasks);
-  releaseTrackObjectUrls(track.id);
-}
-
-// Alias para compatibilidade com código antigo.
-export async function deleteAudioChunks(trackId, chunkCount) {
-  await deleteAssetChunks(trackId, "audio", chunkCount);
-  releaseAudioObjectUrl(trackId);
-}
-
-export function releaseAudioObjectUrl(trackId) {
-  const url = audioUrlCache.get(trackId);
-  if (url) URL.revokeObjectURL(url);
-  audioUrlCache.delete(trackId);
-}
-
-export function releaseTrackObjectUrls(trackId) {
-  releaseAudioObjectUrl(trackId);
-  const coverUrl = coverUrlCache.get(trackId);
-  if (coverUrl) URL.revokeObjectURL(coverUrl);
-  coverUrlCache.delete(trackId);
-}
-
-export function clearMediaObjectUrls() {
-  for (const url of audioUrlCache.values()) URL.revokeObjectURL(url);
-  for (const url of coverUrlCache.values()) URL.revokeObjectURL(url);
-  audioUrlCache.clear();
-  coverUrlCache.clear();
-}
-
-export const clearAudioObjectUrls = clearMediaObjectUrls;
